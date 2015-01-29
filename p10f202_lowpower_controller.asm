@@ -1,6 +1,6 @@
 ;**********************************************************************
-; Low Power Controller
-; Every xx sec, turn on power xx sec                                  *
+; Low Power Controller                                                *
+; Turn on 10 sec, turn off 60 sec                                     *
 ; In turn on period, if GP0 is high, turn off power directly          *
 ; The power is turn on/off by a N MOS.                                *
 ; Low level to turn on the power MOS                                  *
@@ -18,21 +18,26 @@
 ;              -------------
 ; GP2(output) is used to control ESP8266 power. Low voltage will turn 
 ;             on ESP8266 power
-; GP1(output) is used for debug_led
-; GP0(input)  is used for setting_in from powered module
+; GP1(input) is reserved, input
+; GP0(input)  is used for setting_in
 ;**********************************************************************
 ; Revision History
 ; v01 -- initial version
-; v02 -- Fixed several errors
+; v02 -- validated with real hardware  
+;
+;
 ;**********************************************************************
 
+
+ 
 ;------------------------
-; common header
+; command header
 ;------------------------
+
 	list      p=10F202          ; list directive to define processor
 	#include <p10F202.inc>      ; processor specific variable definitions
 
-	__CONFIG   _MCLRE_ON & _CP_OFF & _WDT_OFF
+	__CONFIG   _MCLRE_ON & _CP_ON & _WDT_ON
 
 ;------------------------
 ; variables
@@ -41,7 +46,9 @@ w_temp	    equ     0x08        ; reserved for framework
 status_temp	equ     0x09        ; reserved for framework
 delay_cnt1  equ     0x0a        ; reserved for framework
 delay_cnt2  equ     0x0b        ; reserved for framework
-wdt_wake_cnt equ    0x0c        
+delay_cnt3  equ     0x0c        ; reserved for framework
+wdt_wake_cnt equ    0x0d        
+count_temp   equ    0x0e        
 last_ram    equ     0x1f        ; reserved for framework, last one
 
 ;------------------------
@@ -63,6 +70,7 @@ getb macro reg
     endm
 
 set_option macro k
+    movlw k
     option
     endm
     
@@ -95,17 +103,17 @@ incb macro reg
     endm
   
 decb macro reg
-    decf reg
+    decf reg,f
     endm
 
 testb_ifzero_go macro  reg,lable
-    btfsc reg,b
+    btfss STATUS,Z
     goto $+2
     goto lable
     endm
 
 testb_ifnonzero_go macro reg,lable
-    btfss reg,b
+    btfsc STATUS,Z
     goto $+2
     goto lable
     endm
@@ -117,7 +125,31 @@ testb_ifequal_go macro  reg,k,lable
     goto $+2
     goto lable    
     endm
+    
+testb_ifnotequal_go macro  reg,k,lable
+    movlw k    
+    subwf reg,w
+    btfsc STATUS,Z
+    goto $+2
+    goto lable    
+    endm
 
+testb_ifless_go macro  reg,k,lable
+    movlw k    
+    subwf reg,w
+    btfss STATUS,C
+    goto $+2
+    goto lable    
+    endm
+    
+testb_ifnotless_go macro  reg,k,lable
+    movlw k    
+    subwf reg,w
+    btfsc STATUS,C
+    goto $+2
+    goto lable    
+    endm 
+ 
 save_w_status macro
     movwf w_temp 
     swapf status,w
@@ -131,15 +163,20 @@ restore_w_status macro
     swapf w_temp,w
     endm
 
-delayms macro k1
+delay macro k1
    movlw k1
    movwf delay_cnt1
    movlw 0xff
    movwf delay_cnt2
+   movlw 0xff
+   movwf delay_cnt3
+   decfsz delay_cnt3,f
+   goto $-1   
    decfsz delay_cnt2,f
-   goto $-1
-   decfsz delay_cnt1,f
    goto $-5
+   decfsz delay_cnt1,f
+   goto $-9
+   
    endm
 
 clear_ram macro
@@ -147,7 +184,7 @@ clear_ram macro
     movwf fsr
     clrf indf
     incf fsr,f
-    btfsc fsr,5
+    btfss fsr,5
     goto $-3
     endm
 
@@ -166,17 +203,17 @@ start:
 	nop  
     ; clear ram
     clear_ram
-
-    ;------ GPIO -------------
-    ; GPIO0 input setting_in
-    ; GPIO1 output debug_led
-    ; GPIO2 output power_ctl
-    ; GPIO3 MCLR#
+    
+    ; ------ GPIO -------------
+    ; GPIO0 input setting_in    1   
+    ; GPIO1 input               1
+    ; GPIO2 output power_ctl    0
+    ; GPIO3 MCLR#               1 
     ; 1001
-    setbit GPIO, 2              ; default, turn off ESP8266 power
-    set_gpio_dir 0x05
-
-    ;------ OPTION -----------
+    set_gpio_dir 0x0b
+    setbit GPIO,2              ; default, turn off ESP8266 power
+    
+    ; ------ OPTION -----------
     ; 7 GPWU#  1
     ; 6 GPPU#  1
     ; 5 T0CS   0
@@ -185,41 +222,84 @@ start:
     ; 2-0      111 1:128
     ; 0xcf
     set_option 0xcf
-    
-    ;
-    ; first debug main_loop, once it's ready, switch to main_loop2 to get more lower power
-    ;
-    ; TODO -- check setting_in, power off directly
-    ;
-main_loop:
-    delayms 0xff
-    clrbit GPIO,2
-    delayms 0xff
-    setbit GPIO,2
-    goto main_loop
+    goto main_loop2
 
-main_loop2:
-    ;    
-    ; wdt wakeup method, lower power
-    ;
-    incb wdt_wake_cnt
-    testb_ifequal_go wdt_wake_cnt,100,go_set_high
-    testb_ifequal_go wdt_wake_cnt,200,go_set_low
     
-go_set_high:
-    setbit GPIO,2
+;-------------------------------------------------------------
+;
+; polling mode, lower power control
+; 
+;-------------------------------------------------------------    
+main_loop:
+    ; turn on 10sec, if gpio0 1, turn off power directly
+    setb count_temp,50
+    
+j_turnon_power:
+    clrbit GPIO,2
+    delay 0x1
+    
+    ; from 0-1sec, no checking, after 2sec, checking until 5 sec
+    testb_ifnotless_go count_temp,40,j_no_checking_gpio0
+    testbit_ifset_go GPIO,0,j_turnoff_power    
+j_no_checking_gpio0:
+    decb count_temp
+    testb_ifequal_go count_temp,0,j_turnoff_power
+    goto j_turnon_power
+    
+j_turnoff_power:   
+    ;turn off 60sec
+    setbit GPIO,2    
+    delay 0x5*30
+    delay 0x5*30    
+    
+    goto main_loop
+    
+;-------------------------------------------------------------
+;
+; wdt wakeup method, lower power
+; every time wakeup, around 2 sec
+; 
+;-------------------------------------------------------------
+main_loop2:    
+    incb wdt_wake_cnt
+    ;
+    ; < 10sec, turn on power
+    ;
+    testb_ifless_go wdt_wake_cnt,5,j_wdt_turnon_power
+    goto j_wdt_turnoff_power
+j_wdt_turnon_power:
+    testb_ifnotless_go wdt_wake_cnt,1,j_wdt_check_gpio0
+j_wdt_turnon_power_2:
+    clrbit GPIO,2
     sleep
     nop
     nop
     goto main_loop2
+
+j_wdt_check_gpio0:
+    testbit_ifset_go GPIO,0,j_wdt_pre_turnoff_power
+    goto j_wdt_turnon_power_2
     
-go_set_low:
-    clrbit GPIO,2
+j_wdt_pre_turnoff_power:
+    setb wdt_wake_cnt,5
+    
+j_wdt_turnoff_power:
+    ;
+    ; >= 10sec, <= 60sec, turn off power
+    ;
+    setbit GPIO,2
+    testb_ifnotless_go wdt_wake_cnt,30,j_wdt_pre_main_loop2
+    sleep
+    nop
+    nop
+    goto main_loop2
+
+j_wdt_pre_main_loop2:
     clrb wdt_wake_cnt
     sleep
     nop
     nop
     goto main_loop2
-
+    
 ; remaining code goes here
     end
