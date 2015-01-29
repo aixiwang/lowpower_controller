@@ -37,7 +37,7 @@
 	list      p=10F202          ; list directive to define processor
 	#include <p10F202.inc>      ; processor specific variable definitions
 
-	__CONFIG   _MCLRE_ON & _CP_ON & _WDT_ON
+	__CONFIG   _MCLRE_ON & _CP_ON & _WDT_OFF
 
 ;------------------------
 ; variables
@@ -222,7 +222,7 @@ start:
     ; 2-0      111 1:128
     ; 0xcf
     set_option 0xcf
-    goto main_loop2
+    goto main_loop
 
     
 ;-------------------------------------------------------------
@@ -265,10 +265,12 @@ main_loop2:
     ;
     ; < 10sec, turn on power
     ;
-    testb_ifless_go wdt_wake_cnt,5,j_wdt_turnon_power
+    testb_ifless_go wdt_wake_cnt,3,j_wdt_turnon_power    
     goto j_wdt_turnoff_power
+    
 j_wdt_turnon_power:
-    testb_ifnotless_go wdt_wake_cnt,1,j_wdt_check_gpio0
+    ;testb_ifnotless_go wdt_wake_cnt,1,j_wdt_check_gpio0
+    ;testbit_ifset_go GPIO,0,j_wdt_pre_turnoff_power
 j_wdt_turnon_power_2:
     clrbit GPIO,2
     sleep
@@ -276,12 +278,12 @@ j_wdt_turnon_power_2:
     nop
     goto main_loop2
 
-j_wdt_check_gpio0:
-    testbit_ifset_go GPIO,0,j_wdt_pre_turnoff_power
-    goto j_wdt_turnon_power_2
+;j_wdt_check_gpio0:
+;    testbit_ifset_go GPIO,0,j_wdt_pre_turnoff_power
+;    goto j_wdt_turnon_power_2
     
-j_wdt_pre_turnoff_power:
-    setb wdt_wake_cnt,5
+;j_wdt_pre_turnoff_power:
+;    setb wdt_wake_cnt,5
     
 j_wdt_turnoff_power:
     ;
