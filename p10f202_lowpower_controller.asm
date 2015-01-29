@@ -8,7 +8,7 @@
 ;**********************************************************************
 ; Copyright(c) by Aixi Wang  aixi.wang@hotmail.com                    *
 ;                                                                     *
-; BSD 3-Clause License is applied for the code                        *
+; BSD 3-Clause License is applied to the code                         *
 ;**********************************************************************
 ;              ------------- 
 ; N/C         | 1         8 | GP3/MCLR#/VPP
