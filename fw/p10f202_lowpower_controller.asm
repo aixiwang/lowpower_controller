@@ -30,9 +30,10 @@
 ;------------------------
 ; command header
 ;------------------------
-    list      p=10F202          ; list directive to define processor
+    LIST      P=10F202,R=DEC    ; list directive to define processor
+    
     #include <p10F202.inc>      ; processor specific variable definitions
-
+    
     __CONFIG   _MCLRE_OFF & _CP_ON & _WDT_ON & _IntRC_OSC
 
 ;---------------------------
